@@ -13,9 +13,10 @@ from google import genai
 from google.genai import types
 
 # --- Configuration ---
-SOURCE_DIR = r"F:\Téléchargements\_BD\titi"
-DEST_DIR = r"F:\Téléchargements\_BD\titi-renommes"
+SOURCE_DIR = os.environ.get("SOURCE_DIR", r"F:\Téléchargements\_BD\titi")
+DEST_DIR = os.environ.get("DEST_DIR", r"F:\Téléchargements\_BD\titi-renommes")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 VALID_EXTENSIONS = ('.cbz', '.cbr', '.pdf', '.epub')
 BATCH_SIZE = 50
@@ -78,10 +79,10 @@ def call_gemini_api(filenames, batch_num=1, total_batches=1):
     
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        print(f"🚀 Envoi du lot {batch_num} à l'API Gemini (gemini-2.5-flash)...")
+        print(f"🚀 Envoi du lot {batch_num} à l'API Gemini...")
         
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=payload_content,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
