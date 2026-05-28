@@ -1,0 +1,27 @@
+# Environnement virtuel Python
+venv/
+.venv/
+env/
+ENV/
+
+# Configuration locale & clés secrètes
+.env
+.env.local
+.env.*.local
+
+# Fichiers de cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Rapports de renommage générés localement
+rapport_renommage_bd*.csv
+
+# Éditeurs et IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

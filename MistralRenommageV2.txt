@@ -1,0 +1,27 @@
+"Fichier"; "Série"; "Tome"; "Album"; "Année"; "Divers";
+"Dinodyssée_T01_Les_copains_d'abord_Gaet's_2024@N_art_BD_FR.cbr"; "Dinodyssée"; "01"; "Les copains d'abord"; "2024"; "Gaet's, @N_art_BD_FR";
+"Dirty Rose (Marzena Sowa) (2024)@N_art_BD_FR.cbr"; "Dirty Rose"; ""; ""; "2024"; "(Marzena Sowa), @N_art_BD_FR";
+"Dédales (C.Burns) - T02@BD_fr (2).cbz"; "Dédales"; "02"; ""; ""; "(C.Burns), @BD_fr";
+"Dépôt de bilan de compétences (Snug)@N_art_BD_FR.cbr"; "Dépôt de bilan de compétences"; ""; ""; ""; "(Snug), @N_art_BD_FR";
+"Détour par Epsilon - 01 - 2023@N_art_BD_FR.cbr"; "Détour par Epsilon"; "01"; ""; "2023"; "@N_art_BD_FR";
+"Détour par Epsilon - 02 - 2024@N_art_BD_FR.cbr"; "Détour par Epsilon"; "02"; ""; "2024"; "@N_art_BD_FR";
+"Eau_Des_Collines_L'_01_Jean_De_Florette_1997@N_art_BD_FR.cbr"; "L'eau des collines"; "01"; "Jean de Florette"; "1997"; "@N_art_BD_FR";
+"Eau_Des_Collines_L'_02_Manon_Des_Sources_1997@N_art_BD_FR.cbr"; "L'eau des collines"; "02"; "Manon des sources"; "1997"; "@N_art_BD_FR";
+"Eden Corp.cbz"; "Eden Corp"; ""; ""; ""; "";
+"Eden Corp@BD_fr.cbz"; "Eden Corp"; ""; ""; ""; "@BD_fr";
+"Edith Piaf@N_art_BD_FR.cbr"; "Edith Piaf"; ""; ""; ""; "@N_art_BD_FR";
+"Elixir de Dieu (L') - Tome 2 - Deus Ex Alembicus@BD_fr (2).cbz"; "L'élixir de dieu"; "02"; "Deus Ex Alembicus"; ""; "@BD_fr";
+"Elle(s)- Alice, Charlotte et Renaud [Vives] 2007@N_art_BD_FR.cbr"; "Elle(s)"; ""; "Alice, Charlotte et Renaud"; "2007"; "[Vives], @N_art_BD_FR";
+"Elon_Musk_Enquête_sur_un_nouveau_maître_du_monde_Cunningham_2024@N.cbr"; "Elon Musk"; ""; "Enquête sur un nouveau maître du monde"; "2024"; "Cunningham";
+"Enfant De Salaud - OS - (Gnaedig Mermet) 2025@N_art_BD_FR.cbr"; "Enfant de salaud"; ""; ""; "2025"; "OS, (Gnaedig Mermet), @N_art_BD_FR";
+"Ennemis du Peuple (Les) [Pagani - Bizzarri] 2024@N_art_BD_FR.cbr"; "Les ennemis du peuple"; ""; ""; "2024"; "[Pagani - Bizzarri], @N_art_BD_FR";
+"enquêtes_de_Louise_Beauvoir_Les_OS_Disparition_en_Corse@BD_fr (2).cbz"; "Les enquêtes de Louise Beauvoir"; ""; "Disparition en Corse"; ""; "OS, @BD_fr";
+"Envahichieurs (Les) (Marc Dubuisson) (2024)@N_art_BD_FR.cbr"; "Les envahichieurs"; ""; ""; "2024"; "(Marc Dubuisson), @N_art_BD_FR";
+"Envoyez l'armée ! [Erre] 2024@N_art_BD_FR.cbr"; "Envoyez l'armée !"; ""; ""; "2024"; "[Erre], @N_art_BD_FR";
+"Erectus - OS - (2024)@BD_fr.cbz"; "Erectus"; ""; ""; "2024"; "OS, @BD_fr";
+"Et_que_se_taisent_les_vagues_Désirée_Frappier_2024@N_art_BD_FR.cbr"; "Et que se taisent les vagues"; ""; ""; "2024"; "Désirée Frappier, @N_art_BD_FR";
+"Extrême Orient - 01 - Li Fuzhi [Bourgeron] 2004@N_art_BD_FR.cbr"; "Extrême Orient"; "01"; "Li Fuzhi"; "2004"; "[Bourgeron], @N_art_BD_FR";
+"Extrême orient - 02 - He Sao  (Bourgeron) 2005@N_art_BD_FR.cbr"; "Extrême Orient"; "02"; "He Sao"; "2005"; "(Bourgeron), @N_art_BD_FR";
+"Fabrique_des_news_Un_reporter_à_la_chaine_La_Pierre_Millet_Bellando.cbr"; "La fabrique des news"; ""; "Un reporter à la chaine"; ""; "Pierre Millet Bellando";
+
+
