@@ -37,11 +37,23 @@ cp .env.example .env
 Ouvrez ensuite le fichier `.env` et ajustez ses valeurs :
 
 ```env
-# Clé API Google Gemini
-GEMINI_API_KEY=votre_cle_api_gemini_ici
+# Fournisseur de LLM : 'gemini' ou 'local' (ex: LM Studio)
+LLM_PROVIDER=gemini
 
-# Modèle Gemini à utiliser (ex: gemini-2.5-flash)
+# --- Configuration Gemini ---
+GEMINI_API_KEY=votre_cle_api_gemini_ici
 GEMINI_MODEL=gemini-2.5-flash
+
+# --- Configuration Local / LM Studio ---
+LOCAL_API_URL=http://localhost:1234/v1
+LOCAL_MODEL=meta-llama-3-8b-instruct
+
+# --- Configuration Générale ---
+# Nombre de fichiers envoyés par lot (25 recommandé pour une qualité de recherche maximale)
+BATCH_SIZE=25
+
+# Extensions de fichiers de BD valides (séparées par des virgules)
+VALID_EXTENSIONS=.cbz,.cbr,.pdf,.epub
 
 # Chemins des dossiers (utilisez des chemins absolus)
 SOURCE_DIR=C:\chemin\vers\votre\dossier\source

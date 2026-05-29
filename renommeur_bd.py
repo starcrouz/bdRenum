@@ -15,26 +15,38 @@ from google.genai import types
 # --- Configuration ---
 SOURCE_DIR = os.environ.get("SOURCE_DIR", r"F:\Téléchargements\_BD\titi")
 DEST_DIR = os.environ.get("DEST_DIR", r"F:\Téléchargements\_BD\titi-renommes")
+
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
+
+# Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-VALID_EXTENSIONS = ('.cbz', '.cbr', '.pdf', '.epub')
-BATCH_SIZE = 50
+# Local LLM (ex: LM Studio)
+LOCAL_API_URL = os.environ.get("LOCAL_API_URL", "http://localhost:1234/v1")
+LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "local-model")
+
+extensions_raw = os.environ.get("VALID_EXTENSIONS", ".cbz,.cbr,.pdf,.epub")
+VALID_EXTENSIONS = tuple(ext.strip().lower() for ext in extensions_raw.split(",") if ext.strip())
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 25))
 
 # --- Prompt système pour l'extraction des métadonnées ---
 SYSTEM_INSTRUCTION = """Tu reçois une liste numérotée de fichiers de BD (sous la forme "ID. Nom_de_fichier").
-Extrais leurs métadonnées au format CSV avec le séparateur ";" et les valeurs entre guillemets.
-Ne renvoie QUE le bloc de code CSV (entouré de ```csv ... ```). N'explique rien.
+Ta tâche est de générer le nouveau nom de fichier idéal pour chaque BD sous forme de tableau CSV à deux colonnes : "ID";"Nouveau_Nom".
 
-Colonnes du CSV : "ID";"Série";"Numéro";"Titre";"Année";"Divers"
+Ne renvoie aucun texte d'explication ou de salutation. Retourne uniquement le bloc de code CSV (entouré de ```csv et ```).
 
-Règles d'extraction :
-- ID : Le numéro correspondant au fichier reçu en entrée (ex: "1", "2").
-- Série : Nom de la série propre (sans underscore, article remis au début, ex: "Le prisonnier sans frontières").
-- Numéro : Numéro du tome (ex: "03"). Traite les intégrales (ex: "INT2") comme un numéro de tome. Laisse vide si One Shot (OS).
-- Titre : Nom de l'album / du tome (laisser vide si inexistant).
-- Année : Année de publication sur 4 chiffres (laisser vide si absente).
-- Divers : Auteurs/dessinateurs, mention "OS". Exclure absolument les tags de release comme @BD_fr ou @N_art_BD_FR.
+Règles pour construire "Nouveau_Nom" :
+1. Format cible standard : Nom de la série - Numéro du tome - Nom du tome - Auteur - Année.
+   - S'il n'y a pas de série (One Shot), le format est : Nom de la série - Auteur - Année.
+2. Séparateur : Utilise uniquement un tiret entouré d'espaces ( - ) pour séparer les éléments.
+3. Pas de symboles de démarcation : Ne mets pas de crochets [ ] ni de parenthèses ( ) autour de l'auteur, de l'année ou du tome pour les isoler (par exemple, écris `Auteur - Année` et non `[Auteur] - (Année)`). Cependant, si des parenthèses ou crochets font partie intégrante du titre d'une série ou d'une BD d'origine (ex: "Squeak The Mouse (FR)"), conserve-les.
+4. Uniformisation du Tome :
+   - Pour les tomes standards, le numéro de tome doit être composé uniquement de chiffres, précédé d'un zéro s'il n'y a qu'un chiffre (ex: "01", "05", "12"). Ne mets pas de préfixe comme "T01" ou "Tome 01".
+   - Pour les intégrales ou les tomes spéciaux, conserve la structure d'origine (ex: "INT1" ou "INT2" doivent rester "INT1" ou "INT2", ne les convertis pas en simples chiffres).
+   - S'il n'y a pas de numéro de tome (One Shot ou intégrale unique sans numéro), laisse ce champ vide.
+5. Complétion par IA : Utilise tes connaissances générales sur les bandes dessinées pour ajouter l'auteur (ou dessinateur), l'année de publication ou corriger le nom de l'album s'il est incomplet ou erroné dans le nom d'origine.
+6. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
 """
 
 def list_bd_files(directory):
@@ -48,13 +60,9 @@ def list_bd_files(directory):
         return None
     return filenames
 
-def call_gemini_api(filenames, batch_num=1, total_batches=1, start_id=1):
+def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
     if not filenames:
-        print("Aucun fichier à envoyer à l'API Gemini.")
-        return None
-
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        print("ERREUR: La clé API Gemini n'est pas configurée dans le fichier .env.")
+        print("Aucun fichier à envoyer à l'API.")
         return None
 
     # Numéroter les fichiers pour le prompt de l'API (ex: "1. Fichier.cbz")
@@ -64,47 +72,81 @@ def call_gemini_api(filenames, batch_num=1, total_batches=1, start_id=1):
     print(f"\n=== Lot {batch_num}/{total_batches} : {len(filenames)} fichiers ===")
     
     # TRACE : Afficher la liste des fichiers du lot
-    print(f"📋 Fichiers envoyés à l'API Gemini :")
+    print(f"📋 Fichiers envoyés à l'API ({LLM_PROVIDER}) :")
     for i, filename in enumerate(filenames):
         print(f"  {start_id + i:2d}. {filename}")
     print("-" * 80)
     
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        print(f"🚀 Envoi du lot {batch_num} à l'API Gemini...")
-        
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=payload_content,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.1,
+    csv_content = None
+
+    if LLM_PROVIDER == "gemini":
+        if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+            print("ERREUR: La clé API Gemini n'est pas configurée dans le fichier .env.")
+            return None
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            print(f"🚀 Envoi du lot {batch_num} à l'API Gemini...")
+            
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=payload_content,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.1,
+                )
             )
-        )
-        
-        csv_content = response.text
-        if not csv_content:
-            print("ERREUR: Réponse vide de l'API Gemini.")
+            csv_content = response.text
+        except Exception as e:
+            print(f"❌ ERREUR lors de l'appel à l'API Gemini pour le lot {batch_num}: {e}")
             return None
-
-        # Nettoyage du CSV
-        if isinstance(csv_content, str):
-            if csv_content.startswith("```csv\n"):
-                csv_content = csv_content[len("```csv\n"):]
-            if csv_content.endswith("\n```"):
-                csv_content = csv_content[:-len("\n```")]
-            if csv_content.startswith("```\n"): 
-                csv_content = csv_content[len("```\n"):]
-        else:
-            print(f"ERREUR: Le contenu CSV attendu n'est pas une chaîne de caractères. Reçu: {type(csv_content)}")
+            
+    elif LLM_PROVIDER == "local":
+        import httpx
+        url = f"{LOCAL_API_URL.rstrip('/')}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "model": LOCAL_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": payload_content}
+            ],
+            "temperature": 0.1
+        }
+        try:
+            print(f"🚀 Envoi du lot {batch_num} à l'API locale (LM Studio / {LOCAL_MODEL})...")
+            response = httpx.post(url, json=data, headers=headers, timeout=120.0)
+            response.raise_for_status()
+            resp_json = response.json()
+            if "choices" in resp_json and len(resp_json["choices"]) > 0:
+                csv_content = resp_json["choices"][0]["message"]["content"]
+            else:
+                print("ERREUR: Format de réponse inattendu de l'API locale.")
+                return None
+        except Exception as e:
+            print(f"❌ ERREUR lors de l'appel à l'API locale pour le lot {batch_num}: {e}")
             return None
-        
-        print(f"✅ Réponse CSV reçue pour le lot {batch_num}")
-        return csv_content.strip()
-
-    except Exception as e:
-        print(f"❌ ERREUR lors de l'appel à l'API Gemini pour le lot {batch_num}: {e}")
+    else:
+        print(f"ERREUR: Fournisseur LLM inconnu '{LLM_PROVIDER}'. Modifiez votre fichier .env.")
         return None
+
+    if not csv_content:
+        print("ERREUR: Réponse vide de l'API.")
+        return None
+
+    # Nettoyage du CSV
+    if isinstance(csv_content, str):
+        if csv_content.startswith("```csv\n"):
+            csv_content = csv_content[len("```csv\n"):]
+        if csv_content.endswith("\n```"):
+            csv_content = csv_content[:-len("\n```")]
+        if csv_content.startswith("```\n"): 
+            csv_content = csv_content[len("```\n"):]
+    else:
+        print(f"ERREUR: Le contenu CSV attendu n'est pas une chaîne de caractères. Reçu: {type(csv_content)}")
+        return None
+    
+    print(f"✅ Réponse CSV reçue pour le lot {batch_num}")
+    return csv_content.strip()
 
 def parse_csv_response(csv_content, batch_num=1):
     """Parse la réponse CSV et retourne une liste de dictionnaires."""
@@ -116,7 +158,6 @@ def parse_csv_response(csv_content, batch_num=1):
     
     try:
         csvfile.seek(0)
-        
         try:
             sample = csvfile.read(2048)
             csvfile.seek(0)
@@ -134,7 +175,7 @@ def parse_csv_response(csv_content, batch_num=1):
                     clean_value = str(v).strip().strip('"') if v is not None else ""
                     cleaned_row[clean_key] = clean_value
             
-            if cleaned_row and any(v for v in cleaned_row.values()):
+            if cleaned_row and 'ID' in cleaned_row and 'Nouveau_Nom' in cleaned_row:
                 parsed_data.append(cleaned_row)
                 
     except Exception as e:
@@ -144,14 +185,13 @@ def parse_csv_response(csv_content, batch_num=1):
     print(f"Lot {batch_num}: {len(parsed_data)} entrées parsées.")
     return parsed_data
 
-def sanitize_filename_part(part):
-    """Supprime les caractères invalides pour les noms de fichiers Windows et nettoie."""
-    if not part:
+def sanitize_filename(filename):
+    """Supprime les caractères invalides pour les noms de fichiers Windows."""
+    if not filename:
         return ""
     invalid_chars = r'<>:"/\|?*' + "".join(chr(i) for i in range(32))
-    sanitized = "".join(c for c in part if c not in invalid_chars)
-    sanitized = sanitized.strip(". ") 
-    return sanitized.strip() 
+    sanitized = "".join(c for c in filename if c not in invalid_chars)
+    return sanitized.strip()
 
 def process_files(all_parsed_data, original_files_in_source):
     """Copie et renomme les fichiers BD dans le dossier de résultat."""
@@ -178,15 +218,16 @@ def process_files(all_parsed_data, original_files_in_source):
     
     for data_item in all_parsed_data:
         id_str = data_item.get('ID', '')
+        new_filename = data_item.get('Nouveau_Nom', '')
         try:
             # 1-indexed dans le CSV -> 0-indexed dans la liste python
             file_idx = int(id_str) - 1
-            if 0 <= file_idx < len(original_files_in_source):
+            if 0 <= file_idx < len(original_files_in_source) and new_filename:
                 source_file = original_files_in_source[file_idx]
-                found_matches[source_file] = data_item
+                found_matches[source_file] = new_filename
                 processed_indices.add(file_idx)
         except (ValueError, TypeError):
-            print(f"⚠️ ID invalide ignoré dans le CSV : {id_str}")
+            print(f"⚠️ ID ou nom de fichier invalide ignoré dans le CSV : ID={id_str}, Nouveau_Nom={new_filename}")
             
     # Identifier les fichiers non traités
     for idx, source_file in enumerate(original_files_in_source):
@@ -206,78 +247,22 @@ def process_files(all_parsed_data, original_files_in_source):
             error_count += 1
             continue
         
-        data = found_matches[original_filename_from_fs]
+        new_filename = found_matches[original_filename_from_fs]
         original_full_path = os.path.join(SOURCE_DIR, original_filename_from_fs)
         
         try:
-            _ , extension = os.path.splitext(original_filename_from_fs)
+            # Nettoyer le nom de fichier final pour Windows
+            new_filename_clean = sanitize_filename(new_filename)
             
-            serie_raw = data.get("Série", "")
-            tome_raw = data.get("Numéro", data.get("Tome", ""))
-            album_raw = data.get("Titre", data.get("Album", ""))
-            annee_raw = data.get("Année", "")
-            divers_raw = data.get("Divers", "")
-
-            s_clean = sanitize_filename_part(serie_raw)
-            if not s_clean:
-                print(f"❌ ERREUR: Série vide pour '{original_filename_from_fs}'")
-                error_count += 1
-                continue
-            
-            t_clean = sanitize_filename_part(tome_raw)
-            a_csv_clean = sanitize_filename_part(album_raw) 
-            y_clean = sanitize_filename_part(annee_raw)
-            d_csv_clean = sanitize_filename_part(divers_raw)
-
-            # 1. Extraction et nettoyage de l'auteur depuis le champ "Divers"
-            author_parts = []
-            if d_csv_clean:
-                parts = [p.strip() for p in d_csv_clean.split(",")]
-                for p in parts:
-                    p_upper = p.upper()
-                    # Ignorer les tags de release comme @... ou les mentions d'OS / One Shot
-                    if p.startswith("@") or "OS" in p_upper or "ONE SHOT" in p_upper:
-                        continue
-                    # Nettoyer les parenthèses éventuelles et les espaces
-                    cleaned_p = p.strip("() ").strip()
-                    if cleaned_p:
-                        author_parts.append(cleaned_p)
-            
-            auteur_clean = ", ".join(author_parts) if author_parts else ""
-
-            # 2. Construction des composants du nom de fichier
-            name_parts = [s_clean]
-
-            # Tome / Numéro
-            if t_clean:
-                name_parts.append(t_clean)
-
-            # Titre de l'album (si présent et différent du nom de la série)
-            if a_csv_clean and a_csv_clean.lower().strip() != s_clean.lower().strip():
-                name_parts.append(a_csv_clean)
-
-            # Auteur (à la fin et séparé par un tiret)
-            if auteur_clean:
-                name_parts.append(auteur_clean)
-
-            # Année (juste après, séparée par un tiret)
-            if y_clean:
-                name_parts.append(y_clean)
-
-            # Joindre les composants avec " - " sans parenthèses ni crochets
-            new_filename_base = " - ".join(name_parts)
-            new_filename_base = " ".join(new_filename_base.split())
-
-            if not new_filename_base or new_filename_base == extension.lstrip('.'):
-                print(f"❌ ERREUR: Nom invalide pour '{original_filename_from_fs}'")
+            if not new_filename_clean or new_filename_clean == os.path.splitext(original_filename_from_fs)[1]:
+                print(f"❌ ERREUR: Nom invalide pour '{original_filename_from_fs}' -> '{new_filename_clean}'")
                 error_count += 1
                 continue
 
-            new_filename = f"{new_filename_base}{extension}"
-            dest_full_path = os.path.join(DEST_DIR, new_filename)
+            dest_full_path = os.path.join(DEST_DIR, new_filename_clean)
 
             # COPIE ET RENOMMAGE RÉEL
-            print(f"✅ Renommage: '{original_filename_from_fs}' -> '{new_filename}'")
+            print(f"✅ Renommage: '{original_filename_from_fs}' -> '{new_filename_clean}'")
             shutil.copy2(original_full_path, dest_full_path)
             processed_count += 1
 
@@ -319,7 +304,7 @@ if __name__ == "__main__":
         
         # Le start_id du lot (1-indexed)
         start_id = start_idx + 1
-        csv_response = call_gemini_api(batch_files, batch_num, total_batches, start_id)
+        csv_response = call_llm_api(batch_files, batch_num, total_batches, start_id)
         
         if csv_response:
             parsed_data = parse_csv_response(csv_response, batch_num)
@@ -331,6 +316,6 @@ if __name__ == "__main__":
         print(f"\n📊 Total: {len(all_parsed_data)} entrées parsées sur {total_files} fichiers")
         process_files(all_parsed_data, bd_filenames)
     else:
-        print("❌ Aucune donnée reçue de l'API Gemini.")
+        print("❌ Aucune donnée reçue de l'API LLM.")
 
     print("\n--- Fin du script ---")
