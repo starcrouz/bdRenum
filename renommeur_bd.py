@@ -41,15 +41,21 @@ Ne renvoie aucun texte d'explication ou de salutation. Retourne uniquement le bl
 
 Règles pour construire "Nouveau_Nom" :
 1. Format cible standard : Nom de la série - Numéro du tome - Nom du tome - Auteur - Année.
-   - S'il n'y a pas de série (One Shot), le format est : Nom de la série - Auteur - Année.
-2. Séparateur : Utilise uniquement un tiret entouré d'espaces ( - ) pour séparer les éléments.
-3. Pas de symboles de démarcation : Ne mets pas de crochets [ ] ni de parenthèses ( ) autour de l'auteur, de l'année ou du tome pour les isoler (par exemple, écris `Auteur - Année` et non `[Auteur] - (Année)`). Cependant, si des parenthèses ou crochets font partie intégrante du titre d'une série ou d'une BD d'origine (ex: "Squeak The Mouse (FR)"), conserve-les.
-4. Uniformisation du Tome :
+   - Si un ou plusieurs de ces éléments (tome, auteur, année) sont inconnus, absents ou vides, omets-les complètement.
+   - N'insère jamais de séparateurs consécutifs (comme ` - - - ` ou ` - - `) ni de séparateur inutile. Le nom final doit être propre, par exemple : `Série - Auteur - Année` ou `Série - Numéro - Titre - Auteur`.
+2. Pas de valeurs fictives ou placeholder : N'utilise JAMAIS de valeurs génériques telles que "Inconnu", "Unknown", "NA", "N/A", "None", "Auteur", "Année", "Pas d'auteur", ou similaire pour combler un champ manquant. Si un élément est inconnu, omets-le simplement.
+3. Éviter les répétitions : Si le nom du tome est identique au nom de la série (ou s'il n'y a pas de titre de tome distinct), n'écris pas le nom du tome (ex: écris `Série - 01 - Auteur - Année` et non `Série - 01 - Série - Auteur - Année`).
+4. Reconstitution des articles inversés et corrections :
+   - Si le nom contient un article inversé (souvent placé à la fin entre parenthèses, ex: "Brève Histoire de LAvenir (Une)"), remets-le naturellement au début du titre (ex: "Une Brève Histoire de L'Avenir").
+   - Restaure les apostrophes ou accents manquants (ex: "LAvenir" devient "L'Avenir").
+5. Séparateur : Utilise uniquement un tiret entouré d'espaces ( - ) pour séparer les éléments présents.
+6. Pas de symboles de démarcation : Ne mets pas de crochets [ ] ni de parenthèses ( ) autour de l'auteur, de l'année ou du tome pour les isoler (par exemple, écris `Auteur - Année` et non `[Auteur] - (Année)`). Cependant, si des parenthèses ou crochets font partie intégrante du titre d'une série ou d'une BD d'origine (ex: "Squeak The Mouse (FR)"), conserve-les.
+7. Uniformisation du Tome :
    - Pour les tomes standards, le numéro de tome doit être composé uniquement de chiffres, précédé d'un zéro s'il n'y a qu'un chiffre (ex: "01", "05", "12"). Ne mets pas de préfixe comme "T01" ou "Tome 01".
    - Pour les intégrales ou les tomes spéciaux, conserve la structure d'origine (ex: "INT1" ou "INT2" doivent rester "INT1" ou "INT2", ne les convertis pas en simples chiffres).
    - S'il n'y a pas de numéro de tome (One Shot ou intégrale unique sans numéro), laisse ce champ vide.
-5. Complétion par IA : Utilise tes connaissances générales sur les bandes dessinées pour ajouter l'auteur (ou dessinateur), l'année de publication ou corriger le nom de l'album s'il est incomplet ou erroné dans le nom d'origine.
-6. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
+8. Complétion par IA : Utilise tes connaissances générales sur les bandes dessinées pour ajouter l'auteur (ou dessinateur), l'année de publication ou corriger le nom de l'album s'il est incomplet ou erroné dans le nom d'origine.
+9. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
 """
 
 def run_with_interrupt_protection(func, *args, **kwargs):
@@ -169,7 +175,10 @@ def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
                             chunk_json = json.loads(data_str)
                             if "choices" in chunk_json and len(chunk_json["choices"]) > 0:
                                 delta = chunk_json["choices"][0].get("delta", {})
+                                reasoning = delta.get("reasoning_content", "")
                                 content = delta.get("content", "")
+                                if reasoning:
+                                    print(reasoning, end="", flush=True)
                                 if content:
                                     print(content, end="", flush=True)
                                     full_text.append(content)
@@ -191,6 +200,11 @@ def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
 
     # Nettoyage du CSV
     if isinstance(csv_content, str):
+        import re
+        # Supprimer le bloc de réflexion <think>...</think> s'il a été inclus dans le contenu textuel
+        csv_content = re.sub(r'<think>.*?</think>', '', csv_content, flags=re.DOTALL)
+        csv_content = csv_content.strip()
+        
         if csv_content.startswith("```csv\n"):
             csv_content = csv_content[len("```csv\n"):]
         if csv_content.endswith("\n```"):
@@ -327,9 +341,14 @@ def process_files(all_parsed_data, original_files_in_source, start_id=1):
             error_count += 1
 
     # --- AFFICHAGE DE LA TABLE DES RÉSULTATS ---
-    w_orig = 50
-    w_new = 60
-    w_status = 9
+    # Calcul dynamique des largeurs de colonnes pour éviter de couper les noms de fichiers
+    w_orig = max((len(orig) for orig, _, _ in table_rows), default=12)
+    w_new = max((len(new) for _, new, _ in table_rows), default=11)
+    
+    # S'assurer d'avoir au moins la largeur des titres de colonnes
+    w_orig = max(w_orig, 12)  # "Nom Original"
+    w_new = max(w_new, 11)    # "Nom Proposé"
+    w_status = 9              # "Statut"
     
     # Entête
     header = f"| {'Nom Original':<{w_orig}} | {'Nom Proposé':<{w_new}} | {'Statut':<{w_status}} |"
@@ -344,9 +363,7 @@ def process_files(all_parsed_data, original_files_in_source, start_id=1):
     print(separator)
     
     for orig, new, status in table_rows:
-        orig_disp = orig if len(orig) <= w_orig else orig[:w_orig-3] + "..."
-        new_disp = new if len(new) <= w_new else new[:w_new-3] + "..."
-        print(f"| {orig_disp:<{w_orig}} | {new_disp:<{w_new}} | {status:<{w_status}} |")
+        print(f"| {orig:<{w_orig}} | {new:<{w_new}} | {status:<{w_status}} |")
         
     print(separator)
     
