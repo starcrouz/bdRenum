@@ -43,7 +43,7 @@ Règles pour construire "Nouveau_Nom" :
 1. Format cible standard : Nom de la série - Numéro du tome - Nom du tome - Auteur - Année.
    - Si un ou plusieurs de ces éléments (tome, auteur, année) sont inconnus, absents ou vides, omets-les complètement.
    - N'insère jamais de séparateurs consécutifs (comme ` - - - ` ou ` - - `) ni de séparateur inutile. Le nom final doit être propre, par exemple : `Série - Auteur - Année` ou `Série - Numéro - Titre - Auteur`.
-2. Pas de valeurs fictives ou placeholder : N'utilise JAMAIS de valeurs génériques telles que "Inconnu", "Unknown", "NA", "N/A", "None", "Auteur", "Année", "Pas d'auteur", ou similaire pour combler un champ manquant. Si un élément est inconnu, omets-le simplement.
+2. Pas de valeurs fictives ou placeholder : N'utilise JAMAIS de valeurs génériques telles que "Inconnu", "Auteur Inconnu", "Année Inconnue", "Unknown", "NA", "N/A", "None", "Auteur", "Année", "Pas d'auteur", "Date inconnue", "Inconnue", ou similaire. Si tu ne connais pas l'auteur ou l'année de publication, omets-les simplement de la construction du nom.
 3. Éviter les répétitions : Si le nom du tome est identique au nom de la série (ou s'il n'y a pas de titre de tome distinct), n'écris pas le nom du tome (ex: écris `Série - 01 - Auteur - Année` et non `Série - 01 - Série - Auteur - Année`).
 4. Reconstitution des articles inversés et corrections :
    - Si le nom contient un article inversé (souvent placé à la fin entre parenthèses, ex: "Brève Histoire de LAvenir (Une)"), remets-le naturellement au début du titre (ex: "Une Brève Histoire de L'Avenir").
@@ -52,10 +52,11 @@ Règles pour construire "Nouveau_Nom" :
 6. Pas de symboles de démarcation : Ne mets pas de crochets [ ] ni de parenthèses ( ) autour de l'auteur, de l'année ou du tome pour les isoler (par exemple, écris `Auteur - Année` et non `[Auteur] - (Année)`). Cependant, si des parenthèses ou crochets font partie intégrante du titre d'une série ou d'une BD d'origine (ex: "Squeak The Mouse (FR)"), conserve-les.
 7. Uniformisation du Tome :
    - Pour les tomes standards, le numéro de tome doit être composé uniquement de chiffres, précédé d'un zéro s'il n'y a qu'un chiffre (ex: "01", "05", "12"). Ne mets pas de préfixe comme "T01" ou "Tome 01".
-   - Pour les intégrales ou les tomes spéciaux, conserve la structure d'origine (ex: "INT1" ou "INT2" doivent rester "INT1" ou "INT2", ne les convertis pas en simples chiffres).
+   - Pour les intégrales ou les tomes spéciaux, conserve la structure d'origine (ex: "INT1" ou "INT2" doivent rester "INT1" or "INT2", ne les convertis pas en simples chiffres).
    - S'il n'y a pas de numéro de tome (One Shot ou intégrale unique sans numéro), laisse ce champ vide.
 8. Complétion par IA : Utilise tes connaissances générales sur les bandes dessinées pour ajouter l'auteur (ou dessinateur), l'année de publication ou corriger le nom de l'album s'il est incomplet ou erroné dans le nom d'origine.
-9. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
+9. Nettoyage des tags de release : Retire impérativement tous les tags de release, de scan ou de communauté (comme "@N", "@BD_FR", "@N_art_BD_FR", "@BD_fr", etc.) qui peuvent être collés aux titres de tomes, de séries ou d'auteurs.
+10. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
 """
 
 def run_with_interrupt_protection(func, *args, **kwargs):
