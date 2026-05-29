@@ -22,29 +22,19 @@ VALID_EXTENSIONS = ('.cbz', '.cbr', '.pdf', '.epub')
 BATCH_SIZE = 50
 
 # --- Prompt système pour l'extraction des métadonnées ---
-SYSTEM_INSTRUCTION = """Vous êtes un assistant spécialisé dans le traitement et le renommage de fichiers de bandes dessinées (BD).
-Votre tâche consiste à recevoir une liste de noms de fichiers (un par ligne) et à extraire les métadonnées structurées sous forme de tableau CSV.
+SYSTEM_INSTRUCTION = """Tu reçois une liste numérotée de fichiers de BD (sous la forme "ID. Nom_de_fichier").
+Extrais leurs métadonnées au format CSV avec le séparateur ";" et les valeurs entre guillemets.
+Ne renvoie QUE le bloc de code CSV (entouré de ```csv ... ```). N'explique rien.
 
-Format de sortie :
-- Ne retournez QUE le bloc CSV entouré de ```csv et ```. Aucun autre texte d'introduction, de conclusion ou d'explication.
-- Le séparateur doit être le point-virgule (;) et chaque champ doit être entouré de guillemets doubles (").
-- L'en-tête doit être exactement : "Fichier";"Série";"Numéro";"Titre";"Année";"Divers"
+Colonnes du CSV : "ID";"Série";"Numéro";"Titre";"Année";"Divers"
 
-Règles de parsing pour chaque fichier :
-1. "Fichier" : Le nom exact du fichier d'origine tel que fourni en entrée (avec son extension).
-2. "Série" : Le nom propre de la série de bande dessinée.
-   - Supprimez les underscores (_) et remplacez-les par des espaces.
-   - Si l'article principal est rejeté à la fin (ex: "Dinodyssée", "Arabe_Du_Futur_L'"), reformatez-le pour le remettre au début (ex: "L'arabe du futur", "La dinodyssée").
-   - Uniformisez la casse (ex: "Amère Russie" au lieu de "AMERE_RUSSIE").
-3. "Numéro" : Le numéro du tome de la BD (ex: "01", "02", "12").
-   - Si c'est une intégrale, écrivez "INT".
-   - Si c'est un "One Shot" (tome unique), laissez ce champ vide.
-4. "Titre" : Le titre spécifique de cet album/tome. Si le titre n'est pas mentionné ou s'il s'agit simplement du nom de la série, laissez vide.
-5. "Année" : L'année de publication sur 4 chiffres (ex: "2024"). Laissez vide si absente.
-6. "Divers" : Contient les métadonnées résiduelles séparées par des virgules :
-   - Auteurs/dessinateurs présents (généralement entre parenthèses, ex: "(Zabus et al.)" ou "Gaet's").
-   - Le tag de release/communauté si présent (ex: "@N_art_BD_FR", "@BD_fr").
-   - Mention "OS" ou "One Shot" si elle est mentionnée dans le nom du fichier.
+Règles d'extraction :
+- ID : Le numéro correspondant au fichier reçu en entrée (ex: "1", "2").
+- Série : Nom de la série propre (sans underscore, article remis au début, ex: "Le prisonnier sans frontières").
+- Numéro : Numéro du tome (ex: "03"). Traite les intégrales (ex: "INT2") comme un numéro de tome. Laisse vide si One Shot (OS).
+- Titre : Nom de l'album / du tome (laisser vide si inexistant).
+- Année : Année de publication sur 4 chiffres (laisser vide si absente).
+- Divers : Auteurs/dessinateurs, mention "OS". Exclure absolument les tags de release comme @BD_fr ou @N_art_BD_FR.
 """
 
 def list_bd_files(directory):
@@ -58,7 +48,7 @@ def list_bd_files(directory):
         return None
     return filenames
 
-def call_gemini_api(filenames, batch_num=1, total_batches=1):
+def call_gemini_api(filenames, batch_num=1, total_batches=1, start_id=1):
     if not filenames:
         print("Aucun fichier à envoyer à l'API Gemini.")
         return None
@@ -67,14 +57,16 @@ def call_gemini_api(filenames, batch_num=1, total_batches=1):
         print("ERREUR: La clé API Gemini n'est pas configurée dans le fichier .env.")
         return None
 
-    payload_content = "\n".join(filenames)
+    # Numéroter les fichiers pour le prompt de l'API (ex: "1. Fichier.cbz")
+    payload_lines = [f"{start_id + i}. {filename}" for i, filename in enumerate(filenames)]
+    payload_content = "\n".join(payload_lines)
     
     print(f"\n=== Lot {batch_num}/{total_batches} : {len(filenames)} fichiers ===")
     
     # TRACE : Afficher la liste des fichiers du lot
     print(f"📋 Fichiers envoyés à l'API Gemini :")
-    for i, filename in enumerate(filenames, 1):
-        print(f"  {i:2d}. {filename}")
+    for i, filename in enumerate(filenames):
+        print(f"  {start_id + i:2d}. {filename}")
     print("-" * 80)
     
     try:
@@ -161,11 +153,6 @@ def sanitize_filename_part(part):
     sanitized = sanitized.strip(". ") 
     return sanitized.strip() 
 
-def normalize_filename(filename):
-    """Normalise un nom de fichier en réduisant les espaces multiples."""
-    import re
-    return re.sub(r'\s+', ' ', filename)
-
 def process_files(all_parsed_data, original_files_in_source):
     """Copie et renomme les fichiers BD dans le dossier de résultat."""
     if not all_parsed_data:
@@ -184,33 +171,27 @@ def process_files(all_parsed_data, original_files_in_source):
     processed_count = 0
     error_count = 0
     
-    # Créer un mapping global avec tous les lots
-    metadata_map = {}
-    for data_item in all_parsed_data:
-        if 'Fichier' in data_item:
-            metadata_map[data_item['Fichier']] = data_item
-    
-    # Créer une correspondance approximative pour les noms de fichiers avec espaces multiples
-    normalized_map = {}
-    for csv_filename, data in metadata_map.items():
-        normalized_csv = normalize_filename(csv_filename)
-        normalized_map[normalized_csv] = (csv_filename, data)
-    
-    # Trouver les correspondances
+    # Associer les métadonnées aux fichiers via l'ID (index dans original_files_in_source)
     found_matches = {}
     missing_in_csv = []
+    processed_indices = set()
     
-    for source_file in original_files_in_source:
-        if source_file in metadata_map:
-            found_matches[source_file] = metadata_map[source_file]
-        else:
-            normalized_source = normalize_filename(source_file)
-            if normalized_source in normalized_map:
-                csv_filename, data = normalized_map[normalized_source]
-                found_matches[source_file] = data
-                print(f"🔗 Correspondance approximative: '{source_file}' -> '{csv_filename}'")
-            else:
-                missing_in_csv.append(source_file)
+    for data_item in all_parsed_data:
+        id_str = data_item.get('ID', '')
+        try:
+            # 1-indexed dans le CSV -> 0-indexed dans la liste python
+            file_idx = int(id_str) - 1
+            if 0 <= file_idx < len(original_files_in_source):
+                source_file = original_files_in_source[file_idx]
+                found_matches[source_file] = data_item
+                processed_indices.add(file_idx)
+        except (ValueError, TypeError):
+            print(f"⚠️ ID invalide ignoré dans le CSV : {id_str}")
+            
+    # Identifier les fichiers non traités
+    for idx, source_file in enumerate(original_files_in_source):
+        if idx not in processed_indices:
+            missing_in_csv.append(source_file)
     
     if missing_in_csv:
         print(f"\n⚠️  Fichiers non traités ({len(missing_in_csv)}):")
@@ -248,57 +229,44 @@ def process_files(all_parsed_data, original_files_in_source):
             y_clean = sanitize_filename_part(annee_raw)
             d_csv_clean = sanitize_filename_part(divers_raw)
 
-            # Vérifier si c'est un OS (One Shot)
-            is_one_shot = False
+            # 1. Extraction et nettoyage de l'auteur depuis le champ "Divers"
+            author_parts = []
+            if d_csv_clean:
+                parts = [p.strip() for p in d_csv_clean.split(",")]
+                for p in parts:
+                    p_upper = p.upper()
+                    # Ignorer les tags de release comme @... ou les mentions d'OS / One Shot
+                    if p.startswith("@") or "OS" in p_upper or "ONE SHOT" in p_upper:
+                        continue
+                    # Nettoyer les parenthèses éventuelles et les espaces
+                    cleaned_p = p.strip("() ").strip()
+                    if cleaned_p:
+                        author_parts.append(cleaned_p)
             
-            if d_csv_clean and ('OS' in d_csv_clean.upper() or 'ONE SHOT' in d_csv_clean.upper()):
-                is_one_shot = True
-            elif (a_csv_clean and s_clean and 
-                  a_csv_clean.lower().strip() == s_clean.lower().strip() and 
-                  not t_clean):
-                is_one_shot = True
+            auteur_clean = ", ".join(author_parts) if author_parts else ""
 
-            # Construction du nom
-            name_components = [s_clean] 
+            # 2. Construction des composants du nom de fichier
+            name_parts = [s_clean]
 
-            if is_one_shot:
-                divers_section_parts = []
-                
-                if (a_csv_clean and s_clean and 
-                    a_csv_clean.lower().strip() != s_clean.lower().strip()):
-                    divers_section_parts.append(a_csv_clean)
-                
-                if d_csv_clean:
-                    d_final_for_list = d_csv_clean.strip(", ")
-                    if d_final_for_list:
-                        divers_section_parts.append(d_final_for_list)
-                
-                main_part = s_clean
-                
-            else:
-                if t_clean:
-                    name_components.append(f"- {t_clean}")
-                
-                if a_csv_clean: 
-                    name_components.append(f"- {a_csv_clean}")
-                
-                main_part = " ".join(name_components)
-                
-                divers_section_parts = []
-                if d_csv_clean: 
-                    d_final_for_list = d_csv_clean.strip(", ")
-                    if d_final_for_list: 
-                        divers_section_parts.append(d_final_for_list)
-            
+            # Tome / Numéro
+            if t_clean:
+                name_parts.append(t_clean)
+
+            # Titre de l'album (si présent et différent du nom de la série)
+            if a_csv_clean and a_csv_clean.lower().strip() != s_clean.lower().strip():
+                name_parts.append(a_csv_clean)
+
+            # Auteur (à la fin et séparé par un tiret)
+            if auteur_clean:
+                name_parts.append(auteur_clean)
+
+            # Année (juste après, séparée par un tiret)
             if y_clean:
-                main_part += f" ({y_clean})"
-            
-            if divers_section_parts:
-                valid_divers_elements = [part for part in divers_section_parts if part]
-                if valid_divers_elements:
-                    main_part += f" [{', '.join(valid_divers_elements)}]"
+                name_parts.append(y_clean)
 
-            new_filename_base = " ".join(main_part.split())
+            # Joindre les composants avec " - " sans parenthèses ni crochets
+            new_filename_base = " - ".join(name_parts)
+            new_filename_base = " ".join(new_filename_base.split())
 
             if not new_filename_base or new_filename_base == extension.lstrip('.'):
                 print(f"❌ ERREUR: Nom invalide pour '{original_filename_from_fs}'")
@@ -349,7 +317,9 @@ if __name__ == "__main__":
         
         print(f"\n🔄 Traitement du lot {batch_num}/{total_batches}")
         
-        csv_response = call_gemini_api(batch_files, batch_num, total_batches)
+        # Le start_id du lot (1-indexed)
+        start_id = start_idx + 1
+        csv_response = call_gemini_api(batch_files, batch_num, total_batches, start_id)
         
         if csv_response:
             parsed_data = parse_csv_response(csv_response, batch_num)
