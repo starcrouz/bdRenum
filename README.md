@@ -37,6 +37,9 @@ cp .env.example .env
 Ouvrez ensuite le fichier `.env` et ajustez ses valeurs :
 
 ```env
+# Mode Simulation / Test (si True, simule le renommage sans copier les fichiers)
+DRY_RUN=True
+
 # Fournisseur de LLM : 'gemini' ou 'local' (ex: LM Studio)
 LLM_PROVIDER=gemini
 

@@ -3,6 +3,8 @@ import shutil
 import csv
 import io
 import math
+import threading
+import time
 from dotenv import load_dotenv
 
 # Charger les variables d'environnement depuis le fichier .env
@@ -16,6 +18,7 @@ from google.genai import types
 SOURCE_DIR = os.environ.get("SOURCE_DIR", r"F:\Téléchargements\_BD\titi")
 DEST_DIR = os.environ.get("DEST_DIR", r"F:\Téléchargements\_BD\titi-renommes")
 
+DRY_RUN = os.environ.get("DRY_RUN", "False").lower() in ("true", "1", "yes")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
 
 # Gemini
@@ -48,6 +51,32 @@ Règles pour construire "Nouveau_Nom" :
 5. Complétion par IA : Utilise tes connaissances générales sur les bandes dessinées pour ajouter l'auteur (ou dessinateur), l'année de publication ou corriger le nom de l'album s'il est incomplet ou erroné dans le nom d'origine.
 6. Extension : Conserve l'extension d'origine du fichier (ex: .cbz, .cbr, .pdf).
 """
+
+def run_with_interrupt_protection(func, *args, **kwargs):
+    """Exécute une fonction bloquante dans un thread en permettant au thread principal de capter instantanément le Ctrl+C sous Windows."""
+    result = [None]
+    error = [None]
+    finished = threading.Event()
+    
+    def worker():
+        try:
+            result[0] = func(*args, **kwargs)
+        except Exception as e:
+            error[0] = e
+        finally:
+            finished.set()
+            
+    t = threading.Thread(target=worker)
+    t.daemon = True
+    t.start()
+    
+    # Boucle de sommeil courte pour permettre la livraison du signal SIGINT sous Windows
+    while not finished.is_set():
+        time.sleep(0.1)
+        
+    if error[0]:
+        raise error[0]
+    return result[0]
 
 def list_bd_files(directory):
     filenames = []
@@ -86,8 +115,10 @@ def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             print(f"🚀 Envoi du lot {batch_num} à l'API Gemini...")
+            print("✍️ Réponse du LLM au fur et à mesure :")
+            print("-" * 40)
             
-            response = client.models.generate_content(
+            response = client.models.generate_content_stream(
                 model=GEMINI_MODEL,
                 contents=payload_content,
                 config=types.GenerateContentConfig(
@@ -95,7 +126,14 @@ def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
                     temperature=0.1,
                 )
             )
-            csv_content = response.text
+            full_text = []
+            for chunk in response:
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+                    full_text.append(chunk.text)
+            print()
+            print("-" * 40)
+            csv_content = "".join(full_text)
         except Exception as e:
             print(f"❌ ERREUR lors de l'appel à l'API Gemini pour le lot {batch_num}: {e}")
             return None
@@ -110,18 +148,36 @@ def call_llm_api(filenames, batch_num=1, total_batches=1, start_id=1):
                 {"role": "system", "content": SYSTEM_INSTRUCTION},
                 {"role": "user", "content": payload_content}
             ],
-            "temperature": 0.1
+            "temperature": 0.1,
+            "stream": True
         }
         try:
             print(f"🚀 Envoi du lot {batch_num} à l'API locale (LM Studio / {LOCAL_MODEL})...")
-            response = httpx.post(url, json=data, headers=headers, timeout=120.0)
-            response.raise_for_status()
-            resp_json = response.json()
-            if "choices" in resp_json and len(resp_json["choices"]) > 0:
-                csv_content = resp_json["choices"][0]["message"]["content"]
-            else:
-                print("ERREUR: Format de réponse inattendu de l'API locale.")
-                return None
+            print("✍️ Réponse du LLM au fur et à mesure :")
+            print("-" * 40)
+            
+            full_text = []
+            with httpx.stream("POST", url, json=data, headers=headers, timeout=120.0) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[len("data: "):].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            import json
+                            chunk_json = json.loads(data_str)
+                            if "choices" in chunk_json and len(chunk_json["choices"]) > 0:
+                                delta = chunk_json["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    print(content, end="", flush=True)
+                                    full_text.append(content)
+                        except Exception:
+                            pass
+            print()
+            print("-" * 40)
+            csv_content = "".join(full_text)
         except Exception as e:
             print(f"❌ ERREUR lors de l'appel à l'API locale pour le lot {batch_num}: {e}")
             return None
@@ -193,20 +249,21 @@ def sanitize_filename(filename):
     sanitized = "".join(c for c in filename if c not in invalid_chars)
     return sanitized.strip()
 
-def process_files(all_parsed_data, original_files_in_source):
-    """Copie et renomme les fichiers BD dans le dossier de résultat."""
+def process_files(all_parsed_data, original_files_in_source, start_id=1):
+    """Copie et renomme les fichiers BD dans le dossier de résultat (ou simule le renommage)."""
     if not all_parsed_data:
         print("Aucune donnée parsée à traiter.")
-        return
+        return 0, 0
 
-    # Créer le dossier de destination
-    if not os.path.exists(DEST_DIR):
-        try:
-            os.makedirs(DEST_DIR)
-            print(f"📁 Dossier de destination '{DEST_DIR}' créé.")
-        except OSError as e:
-            print(f"ERREUR: Impossible de créer le dossier de destination '{DEST_DIR}': {e}")
-            return
+    # Créer le dossier de destination si on n'est pas en mode simulation
+    if not DRY_RUN:
+        if not os.path.exists(DEST_DIR):
+            try:
+                os.makedirs(DEST_DIR)
+                print(f"📁 Dossier de destination '{DEST_DIR}' créé.")
+            except OSError as e:
+                print(f"ERREUR: Impossible de créer le dossier de destination '{DEST_DIR}': {e}")
+                return 0, 0
 
     processed_count = 0
     error_count = 0
@@ -220,30 +277,26 @@ def process_files(all_parsed_data, original_files_in_source):
         id_str = data_item.get('ID', '')
         new_filename = data_item.get('Nouveau_Nom', '')
         try:
-            # 1-indexed dans le CSV -> 0-indexed dans la liste python
-            file_idx = int(id_str) - 1
+            # 1-indexed dans le CSV -> index relatif dans le lot actuel
+            file_idx = int(id_str) - start_id
             if 0 <= file_idx < len(original_files_in_source) and new_filename:
                 source_file = original_files_in_source[file_idx]
                 found_matches[source_file] = new_filename
                 processed_indices.add(file_idx)
         except (ValueError, TypeError):
-            print(f"⚠️ ID ou nom de fichier invalide ignoré dans le CSV : ID={id_str}, Nouveau_Nom={new_filename}")
+            pass
             
     # Identifier les fichiers non traités
     for idx, source_file in enumerate(original_files_in_source):
         if idx not in processed_indices:
             missing_in_csv.append(source_file)
-    
-    if missing_in_csv:
-        print(f"\n⚠️  Fichiers non traités ({len(missing_in_csv)}):")
-        for filename in missing_in_csv:
-            print(f"   - {filename}")
 
-    print(f"\n📝 Traitement de {len(found_matches)} fichiers...")
+    # Préparer les données pour la table d'affichage
+    table_rows = []
 
     for original_filename_from_fs in original_files_in_source:
         if original_filename_from_fs not in found_matches:
-            print(f"❌ IGNORÉ: '{original_filename_from_fs}'")
+            table_rows.append((original_filename_from_fs, "N/A", "IGNORÉ"))
             error_count += 1
             continue
         
@@ -255,67 +308,108 @@ def process_files(all_parsed_data, original_files_in_source):
             new_filename_clean = sanitize_filename(new_filename)
             
             if not new_filename_clean or new_filename_clean == os.path.splitext(original_filename_from_fs)[1]:
-                print(f"❌ ERREUR: Nom invalide pour '{original_filename_from_fs}' -> '{new_filename_clean}'")
+                table_rows.append((original_filename_from_fs, new_filename_clean or "Nom vide", "ERREUR"))
                 error_count += 1
                 continue
 
             dest_full_path = os.path.join(DEST_DIR, new_filename_clean)
 
-            # COPIE ET RENOMMAGE RÉEL
-            print(f"✅ Renommage: '{original_filename_from_fs}' -> '{new_filename_clean}'")
-            shutil.copy2(original_full_path, dest_full_path)
-            processed_count += 1
+            if DRY_RUN:
+                table_rows.append((original_filename_from_fs, new_filename_clean, "SIMULÉ"))
+                processed_count += 1
+            else:
+                shutil.copy2(original_full_path, dest_full_path)
+                table_rows.append((original_filename_from_fs, new_filename_clean, "OK"))
+                processed_count += 1
 
         except Exception as e:
-            print(f"❌ ERREUR lors du traitement de '{original_filename_from_fs}': {e}")
+            table_rows.append((original_filename_from_fs, new_filename, "ERREUR"))
             error_count += 1
-            
-    print(f"\n🎯 === RÉSULTATS FINAUX ===")
-    print(f"✅ {processed_count} fichiers copiés et renommés avec succès")
-    print(f"❌ {error_count} erreurs ou fichiers ignorés")
-    if processed_count > 0:
-        print(f"📂 Fichiers disponibles dans: {DEST_DIR}")
+
+    # --- AFFICHAGE DE LA TABLE DES RÉSULTATS ---
+    w_orig = 50
+    w_new = 60
+    w_status = 9
+    
+    # Entête
+    header = f"| {'Nom Original':<{w_orig}} | {'Nom Proposé':<{w_new}} | {'Statut':<{w_status}} |"
+    separator = "+" + "-" * (w_orig + 2) + "+" + "-" * (w_new + 2) + "+" + "-" * (w_status + 2) + "+"
+    
+    print("\n📊 RÉSULTATS DU TRAITEMENT :")
+    if DRY_RUN:
+        print("⚠️  [MODE SIMULATION ACTIVE] Aucun fichier n'a été réellement créé ou renommé.")
+    
+    print(separator)
+    print(header)
+    print(separator)
+    
+    for orig, new, status in table_rows:
+        orig_disp = orig if len(orig) <= w_orig else orig[:w_orig-3] + "..."
+        new_disp = new if len(new) <= w_new else new[:w_new-3] + "..."
+        print(f"| {orig_disp:<{w_orig}} | {new_disp:<{w_new}} | {status:<{w_status}} |")
+        
+    print(separator)
+    
+    return processed_count, error_count
 
 # --- Exécution principale avec pagination ---
 if __name__ == "__main__":
-    print("--- Script de renommage de BD avec pagination ---")
-    print(f"Configuration: {BATCH_SIZE} fichiers par lot\n")
+    try:
+        print("--- Script de renommage de BD avec pagination ---")
+        print(f"Configuration: {BATCH_SIZE} fichiers par lot\n")
 
-    bd_filenames = list_bd_files(SOURCE_DIR)
-    if not bd_filenames:
-        print("Aucun fichier BD trouvé. Arrêt du script.")
-        exit()
+        bd_filenames = list_bd_files(SOURCE_DIR)
+        if not bd_filenames:
+            print("Aucun fichier BD trouvé. Arrêt du script.")
+            exit()
 
-    total_files = len(bd_filenames)
-    total_batches = math.ceil(total_files / BATCH_SIZE)
-    
-    print(f"📁 {total_files} fichiers trouvés dans '{SOURCE_DIR}'")
-    print(f"📦 Traitement en {total_batches} lot(s) de {BATCH_SIZE} fichiers maximum")
-    
-    all_parsed_data = []
-    
-    # Traiter par lots
-    for batch_num in range(1, total_batches + 1):
-        start_idx = (batch_num - 1) * BATCH_SIZE
-        end_idx = start_idx + BATCH_SIZE
-        batch_files = bd_filenames[start_idx:end_idx]
+        total_files = len(bd_filenames)
+        total_batches = math.ceil(total_files / BATCH_SIZE)
         
-        print(f"\n🔄 Traitement du lot {batch_num}/{total_batches}")
+        print(f"📁 {total_files} fichiers trouvés dans '{SOURCE_DIR}'")
+        print(f"📦 Traitement en {total_batches} lot(s) de {BATCH_SIZE} fichiers maximum")
         
-        # Le start_id du lot (1-indexed)
-        start_id = start_idx + 1
-        csv_response = call_llm_api(batch_files, batch_num, total_batches, start_id)
+        total_processed = 0
+        total_errors = 0
         
-        if csv_response:
-            parsed_data = parse_csv_response(csv_response, batch_num)
-            all_parsed_data.extend(parsed_data)
+        # Traiter par lots
+        for batch_num in range(1, total_batches + 1):
+            start_idx = (batch_num - 1) * BATCH_SIZE
+            end_idx = start_idx + BATCH_SIZE
+            batch_files = bd_filenames[start_idx:end_idx]
+            
+            print(f"\n🔄 Traitement du lot {batch_num}/{total_batches}")
+            
+            # Le start_id du lot (1-indexed)
+            start_id = start_idx + 1
+            csv_response = run_with_interrupt_protection(call_llm_api, batch_files, batch_num, total_batches, start_id)
+            
+            if csv_response:
+                parsed_data = parse_csv_response(csv_response, batch_num)
+                if parsed_data:
+                    # Traiter et afficher le tableau des résultats immédiatement pour ce lot
+                    processed_count, error_count = process_files(parsed_data, batch_files, start_id)
+                    total_processed += processed_count
+                    total_errors += error_count
+                else:
+                    print(f"❌ Échec du parsing du CSV du lot {batch_num}")
+                    total_errors += len(batch_files)
+            else:
+                print(f"❌ Échec du traitement du lot {batch_num}")
+                total_errors += len(batch_files)
+        
+        # --- RÉSULTATS FINAUX GLOBAUX ---
+        print(f"\n🎯 === RÉSULTATS FINAUX GLOBAUX ===")
+        if DRY_RUN:
+            print(f"✅ {total_processed} fichiers simulés avec succès")
         else:
-            print(f"❌ Échec du traitement du lot {batch_num}")
-    
-    if all_parsed_data:
-        print(f"\n📊 Total: {len(all_parsed_data)} entrées parsées sur {total_files} fichiers")
-        process_files(all_parsed_data, bd_filenames)
-    else:
-        print("❌ Aucune donnée reçue de l'API LLM.")
+            print(f"✅ {total_processed} fichiers copiés et renommés avec succès")
+            
+        print(f"❌ {total_errors} erreurs ou fichiers ignorés/non traités")
+        if not DRY_RUN and total_processed > 0:
+            print(f"📂 Fichiers disponibles dans: {DEST_DIR}")
 
-    print("\n--- Fin du script ---")
+        print("\n--- Fin du script ---")
+    except KeyboardInterrupt:
+        print("\n\n🛑 Interruption par l'utilisateur (Ctrl+C). Arrêt immédiat.")
+        os._exit(0)
